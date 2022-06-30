@@ -1,0 +1,25 @@
+## Download expression matrix from NCBI(GSE111229)
+# load data
+a=read.table("GSE111229_Mammary_Tumor_fibroblasts_768samples_rawCounts.txt.gz", header = T, sep = "\t")
+# filter the matrix
+dat=a[apply(a,1,function(x) sum(x>1)>floor(ncol(a)/50)),]
+# one choice of normalization is CPM(count-per-million), it only normalizes the reads in terms of the whole counts and 
+  remove the difference among library sizes. i.e. if the count of one gene in one cell is M, and the count of the whole library is
+  N, then the result of this gene after CPM is M/N * 1000000. Whatch the curriculum of statequest!
+dat=log2(edgeR::cpm(dat)+1)
+## When cluster, we need to obtain the Similarity Measurement among different samples(cells), so we need to t(dat).
+hc=hclust(dist(t(dat)))
+clus=cutree(hc,4)
+group_list=as.factor(clus)
+table(group_list)
+# extract the information of batches
+library(stringr)
+colnames(dat)
+plate=str_split(colnames(dat), '_',simplify=T)[,3]
+table(plate)
+# count the number of expressed genes in each cell
+n_g=apply(a,2,function(x) sum(x>1))
+# making data fram with cell attributes
+df=data.frame(g=group_list,plate=plate,n_g=n_g)
+group_list=df$g
+
