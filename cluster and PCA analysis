@@ -1,25 +1,98 @@
-## Download expression matrix from NCBI(GSE111229)
-# load data
-a=read.table("GSE111229_Mammary_Tumor_fibroblasts_768samples_rawCounts.txt.gz", header = T, sep = "\t")
-# filter the matrix
-dat=a[apply(a,1,function(x) sum(x>1)>floor(ncol(a)/50)),]
-# one choice of normalization is CPM(count-per-million), it only normalizes the reads in terms of the whole counts and 
-  remove the difference among library sizes. i.e. if the count of one gene in one cell is M, and the count of the whole library is
-  N, then the result of this gene after CPM is M/N * 1000000. Whatch the curriculum of statequest!
-dat=log2(edgeR::cpm(dat)+1)
-## When cluster, we need to obtain the Similarity Measurement among different samples(cells), so we need to t(dat).
-hc=hclust(dist(t(dat)))
-clus=cutree(hc,4)
-group_list=as.factor(clus)
-table(group_list)
-# extract the information of batches
-library(stringr)
-colnames(dat)
-plate=str_split(colnames(dat), '_',simplify=T)[,3]
-table(plate)
-# count the number of expressed genes in each cell
-n_g=apply(a,2,function(x) sum(x>1))
-# making data fram with cell attributes
-df=data.frame(g=group_list,plate=plate,n_g=n_g)
-group_list=df$g
+rm(list = ls())
+
+## Install packages and load them
+if (!requireNamespace("Rtsne"))
+  install.packages("Rtsne")
+if (!requireNamespace("FactoMineR"))
+  install.packages("FactoMineR")
+if (!requireNamespace("factoextra"))
+  install.packages("factoextra")
+if (!requireNamespace("BiocManager"))
+  install.packages("BiocManager")
+if (!requireNamespace("scater"))
+  BiocManager::install("scater")
+if (!requireNamespace("scRNAseq"))
+  BiocManager::install("scRNAseq") 
+if (!requireNamespace("M3Drop"))
+  BiocManager::install("M3Drop") 
+if (!requireNamespace("ROCR"))
+  BiocManager::install("ROCR")
+suppressMessages(library(scater))
+suppressMessages(library(scRNAseq))
+library(ggplot2)
+library(tidyr)
+library(cowplot)
+library("FactoMineR")
+library("factoextra")
+library("ROCR")
+library(pheatmap)
+
+## load sample data
+fluidigm=ReprocessedFluidigmData()
+# using assays to get the expression matrix
+# rsem will produces counts with Decimals
+ct <- floor(assays(fluidigm)$rsem_counts)
+# got clinical information
+sample_ann=as.data.frame(colData(fluidigm))
+# Checking the gene expression of each cell
+box=lapply(colnames(sample_ann[,1:19]), function(i){
+  dat=sample_ann[,i,drop=F]
+  dat$sample=rownames(dat)
+  ggplot(dat, aes("all cells", get(i)))+
+    geom_boxplot()+xlab(NULL)+ylab(i)
+})
+plot_grid(plotlist = box, ncol = 5)
+# explore the gene expression of data
+counts <- ct
+fivenum(apply(counts,1,function(x) sum(x>0)))
+boxplot(apply(counts,1,function(x) sum(x>0)))
+fivenum(apply(counts,2,function(x) sum(x>0)))
+hist(apply(counts,2,function(x) sum(x>0)))
+# filtering genes
+choosed_genes=apply(counts,1,function(x) sum(x>0) )>0
+table(choosed_genes)
+counts <- counts[choosed_genes,]
+
+## explore the correlation among all genes
+dat <- log2(edgeR::cpm(counts) + 1)
+dat_back <- dat
+exprSet <- dat_back
+# creating annotation
+group_list <- sample_ann$Biological_Condition
+tmp <- data.frame(g = group_list)
+rownames(tmp) <-  colnames(exprSet)
+pheatmap(cor(exprSet), annotation_col = tmp) # the correlation within groups is larger than that among groups
+
+## Clustering analysis
+# because of the limit of calculation power，I choose the top 500 genes according to sd
+C_exprSet = exprSet[names(sort(apply(exprSet, 1, sd), decreasing = T)[1:500]), ]
+hc <- hclust(dist(t(C_exprSet)))
+clus <-  cutree(hc, 4)
+group_list <-  as.factor(clus)
+table(group_list,sample_ann$Biological_Condition) 
+
+## PCA analysis
+C_exprSet=t(C_exprSet)
+C_exprSet=as.data.frame(C_exprSet)
+# define the group information
+plate <- sample_ann$Biological_Condition
+C_exprSet <- cbind(C_exprSet,plate)
+dat.pca <- PCA(C_exprSet[, -ncol(C_exprSet)], graph = FALSE)
+fviz_pca_ind(dat.pca, 
+             geom.ind = "point", 
+             col.ind = C_exprSet$plate, 
+             addEllipses = TRUE, 
+             legend.title = "Groups")
+
+
+
+
+
+
+
+
+
+
+
+
 
