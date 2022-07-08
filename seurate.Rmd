@@ -1,0 +1,144 @@
+---
+title: "seurate workflow"
+author: "Boyu Jiang"
+date: '2022-07-08'
+output: html_document
+---
+## load packages
+
+```{r}
+suppressMessages(library(seurate))
+suppressMessages(library(seurate))
+library(stringr)
+library(dplyr)
+```
+
+## load data and check it
+## using raw counts is the easiest way to process data through Seurat
+```{r}
+counts <- read.table("GSE111229_Mammary_Tumor_fibroblasts_768samples_rawCounts.txt.gz")
+dim(counts)
+fivenum(apply(counts,1,function(x) sum(x>0) ))
+boxplot(apply(counts,1,function(x) sum(x>0) ))
+fivenum(apply(counts,2,function(x) sum(x>0) ))
+hist(apply(counts,2,function(x) sum(x>0) ))
+
+dat=log2(edgeR::cpm(counts)+1) 
+hc=hclust(dist(t(dat)))  
+plot(hc,labels = FALSE)  
+clus = cutree(hc, 4) 
+group_list= as.factor(clus) 
+table(group_list) 
+```
+
+## extract batch information
+## splite the colnames by '_', and get the thrid column
+## here we define the genes with more than 1 read as expressed, and count their number in each sample
+```{r}
+plate=str_split(colnames(dat),'_',simplify = T)[,3]
+table(plate)
+n_g = apply(counts,2,function(x) sum(x>1))
+```
+## create dataframe that includes the attributes of cells
+```{r}
+df=data.frame(g=group_list,plate=plate,n_g=n_g)
+meta=df
+identical(rownames(meta), colnames(counts))
+```
+ 
+## create seurat object(V3)
+## min.cell--gene must eb expressed in at least 5 cells
+## min.genes-- gene must have at least 1000 reads
+```{r}
+sce <- CreateSeuratObject(counts  = counts,
+                          meta.data = meta,
+                          min.cells = 5,
+                          min.genes = 2000, 
+                          project = "sce")
+```
+
+## visualization of feature
+```{r}
+plot1 <- VlnPlot(object = sce,
+                 features = c("nFeature_RNA", "nCount_RNA"),
+                 group.by = 'plate',
+                 ncol = 2)
+plot2 <- VlnPlot(object = sce, 
+                 features = c("nFeature_RNA", "nCount_RNA"), 
+                 group.by = 'g',
+                 ncol = 2)
+CombinePlots(plots = list(plot1, plot2))
+```
+
+## add ERCC or MT to sce for later QC
+```{r}
+sce[["percent.ercc"]] <- PercentageFeatureSet(sce, pattern = "^ERCC-")
+VlnPlot(object = sce, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.ercc" ), 
+        group.by = 'g',
+        ncol = 3)
+```
+## normalization
+```{r}
+sce <- NormalizeData(object = sce,
+                     normalization.method = "LogNormalize",
+                     scale.factor = 10000)
+sce[['RNA']][1:3,1:3]
+```
+## identify HVGs（highly variable genes）
+```{r}
+sce <- FindVariableFeatures(sce, selection.method = "vst")
+VariableFeatures(sce)
+```
+## scaling 
+## result is stored in sce@assays$RNA@scale.data
+```{r}
+all.genes <- rownames(sce)
+length(rownames(sce))
+sce <- ScaleData(sce, features = all.genes,
+                 vars.to.regress = c("nCount_RNA","percent.ercc" ))
+```
+
+
+## dimensionality reduction--PCA
+## result is stored in sce@reductions$pca@feature.loadings
+```{r}
+sce <- RunPCA(sce, 
+              features = VariableFeatures(object = sce),
+              ndims.print = 1:5, 
+              nfeatures.print = 5)
+DimPlot(sce, reduction = "pca",group.by = 'plate')
+DimPlot(sce, reduction = "pca",group.by = 'g')
+ElbowPlot(sce)
+```
+## clustering
+## the higher resolution, the more number of clusters,when set resolution as 0.4, we get number of communities: 4
+```{r}
+sce <- FindNeighbors(sce, dims = 1:15)
+sce <- FindClusters(sce, resolution = 0.4)
+```
+
+## another way 0f dimensionality reduction--tSNE
+```{r}
+sce <- RunTSNE(object = sce, dims.use = 1:15, do.fast = TRUE)
+DimPlot(sce,reduction = "tsne",label=T)
+```
+## find marker genes
+## min.pct: the percent of a gene in any two gouprs of cells must higher than a value
+```{r}
+cluster2.markers <- FindMarkers(sce, ident.1 = 1, min.pct = 0.25)
+head(cluster2.markers, n = 5)
+markers_genes =  rownames(head(cluster2.markers, n = 5))
+VlnPlot(sce, features = markers_genes)
+FeaturePlot(sce, features = markers_genes)
+```
+
+## find all markers and make heatmap
+```{r}
+sce.markers <- FindAllMarkers(sce, only.pos = TRUE, 
+                              min.pct = 0.25, 
+                              logfc.threshold = 0.25)
+top20 <- sce.markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+DoHeatmap(sce, features = top20$gene) + NoLegend()
+```
+
